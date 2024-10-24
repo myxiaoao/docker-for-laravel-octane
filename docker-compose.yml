@@ -11,7 +11,7 @@ services:
    ports:
      - 3306:3306
    volumes:
-     - laravel_db_data:/var/lib/mysql/data
+     - laravel_db_data:/var/lib/mysql
    networks:
      - laravel-db-network
    healthcheck:
