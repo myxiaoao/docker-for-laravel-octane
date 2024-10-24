@@ -1,0 +1,141 @@
+services:
+ db:
+   image: mysql:8.0.40
+   restart: unless-stopped
+   container_name: laravel-db
+   environment:
+     MYSQL_DATABASE: ${DB_DATABASE}
+     MYSQL_ALLOW_EMPTY_PASSWORD: 'YES'
+     MYSQL_USER: ${DB_USERNAME}
+     MYSQL_PASSWORD: ${DB_PASSWORD}
+   ports:
+     - 3306:3306
+   volumes:
+     - laravel_db_data:/var/lib/mysql/data
+   networks:
+     - laravel-db-network
+   healthcheck:
+     test: mysql -h localhost -u root -e 'SELECT version();'
+     start_period: 5s
+     interval: 15s
+     timeout: 5s
+     retries: 5
+
+ app: &app
+   build:
+     context: ./
+     dockerfile: docker/php/Dockerfile
+   user: ${UID}:${GID}
+   restart: unless-stopped
+   container_name: laravel-app
+   environment:
+     COMMAND: php artisan octane:start --watch --host=0.0.0.0 --port=8000
+     PROCESS: app
+   depends_on:
+     db:
+       condition: service_healthy
+     redis:
+       condition: service_healthy
+   volumes:
+     - ./:/var/www
+     - laravel_app_composer_data:/.composer
+     - laravel_app_npm_data:/.npm
+   networks:
+     - laravel-db-network
+     - laravel-webserver-network
+     - laravel-redis-network
+   healthcheck:
+     test: curl -s http://localhost:8000/up >/dev/null || exit 1
+     interval: 5s
+     timeout: 10s
+     retries: 20
+
+ horizon:
+   <<: *app
+   container_name: laravel-horizon
+   environment:
+     COMMAND: php artisan horizon
+     PROCESS: horizon
+   networks:
+     - laravel-db-network
+     - laravel-redis-network
+   healthcheck:
+     test: php artisan horizon:status | grep -q 'is running'
+     interval: 5s
+     timeout: 10s
+     retries: 20
+
+ schedule:
+   <<: *app
+   container_name: laravel-schedule
+   environment:
+     COMMAND: supercronic -quiet /var/www/docker/php/schedule/crontab
+     PROCESS: schedule
+   networks:
+     - laravel-db-network
+     - laravel-redis-network
+   healthcheck:
+     test: supercronic -test /var/www/docker/php/schedule/crontab | grep -q 'is valid'
+     interval: 5s
+     timeout: 10s
+     retries: 2
+
+ webserver:
+   image: nginx:1.27.2-alpine
+   container_name: laravel-webserver
+   restart: unless-stopped
+   volumes:
+     - ./:/var/www
+     - ./docker/nginx/conf.d/:/etc/nginx/conf.d/
+     - ./storage/logs/nginx/:/var/log/nginx/
+   ports:
+     - 80:80
+   networks:
+     - laravel-webserver-network
+   healthcheck:
+     test: curl -s http://localhost/up >/dev/null || exit 1
+     interval: 5s
+     timeout: 10s
+     retries: 20
+
+ redis:
+   image: redis:7.4.1-alpine
+   restart: unless-stopped
+   container_name: laravel-redis
+   command:
+     - 'redis-server'
+     - '--requirepass ${REDIS_PASSWORD}'
+   volumes:
+     - laravel_redis_data:/data
+   networks:
+     - laravel-redis-network
+   healthcheck:
+     test: redis-cli ping
+     interval: 5s
+     timeout: 10s
+     retries: 20
+
+volumes:
+ laravel_db_data:
+   driver: local
+   name: laravel_db_data
+ laravel_redis_data:
+   driver: local
+   name: laravel_redis_data
+ laravel_app_composer_data:
+   driver: local
+   name: laravel_app_composer_data
+ laravel_app_npm_data:
+   driver: local
+   name: laravel_app_composer_data
+
+networks:
+ laravel-db-network:
+   driver: bridge
+   name: laravel-db-network
+ laravel-webserver-network:
+   driver: bridge
+   name: laravel-webserver-network
+ laravel-redis-network:
+   driver: bridge
+   name: laravel-redis-network
